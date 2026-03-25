@@ -2,9 +2,8 @@ import streamlit as st
 import pandas as pd
 import base64
 import os
-import io
 from datetime import datetime
-import openpyxl
+from fpdf import FPDF # PDF 생성을 위한 라이브러리
 
 # 1. 페이지 기본 설정 (공통 필수 규칙 2)
 st.set_page_config(page_title="지출결의서 작성 앱", layout="centered")
@@ -17,7 +16,6 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # 3. 보안 (비밀번호) 로그인 로직 (공통 필수 규칙 3)
-# [나중에 직접 채워 넣어야 하는 부분] Streamlit Cloud 대시보드의 Secrets에 APP_PASSWORD = "비밀번호" 를 입력하세요.
 if "authenticated" not in st.session_state:
     st.session_state["authenticated"] = False
 
@@ -43,7 +41,6 @@ def get_base64_of_bin_file(bin_file):
         return base64.b64encode(data).decode()
     return ""
 
-# [나중에 직접 채워 넣어야 하는 부분] 깃허브 저장소에 "company_logo.png" 파일을 업로드해 두세요.
 logo_base64 = get_base64_of_bin_file("company_logo.png")
 if logo_base64:
     st.markdown(f"""
@@ -91,7 +88,7 @@ with st.sidebar:
 def thin_divider():
     st.markdown('<hr style="margin-top: 15px; margin-bottom: 15px; border: 0; border-top: 1px solid rgba(49, 51, 63, 0.2);">', unsafe_allow_html=True)
 
-# --- 상태 초기화 (Session State) ---
+# --- 상태 초기화 ---
 if "form_data" not in st.session_state:
     st.session_state["form_data"] = {
         "project": "선택", "department": "기술사업화팀", "author": "",
@@ -104,11 +101,10 @@ if "expense_data" not in st.session_state:
 
 # --- 메인 화면 로직 ---
 st.title("📄 지출결의서 작성")
-st.caption("작성된 데이터는 깃허브에 저장된 기존 엑셀 양식 서식을 그대로 유지한 채 출력됩니다.")
+st.caption("시스템이 기존 엑셀 양식과 동일한 형태의 완성된 PDF 보고서를 직접 생성합니다.")
 
-# --- 기존 작성본 업로드 (자동 완성 영역) ---
-uploaded_file = st.file_uploader("📂 기존에 작성했던 엑셀 파일이 있다면 업로드하세요. (내용 자동 입력)", type=['xlsx'])
-
+# (과거 엑셀 자동완성 기능은 편의성을 위해 그대로 유지)
+uploaded_file = st.file_uploader("📂 과거 작성했던 엑셀 파일로 내용 자동 입력 (선택사항)", type=['xlsx'])
 if uploaded_file is not None:
     try:
         df_up = pd.read_excel(uploaded_file, header=None)
@@ -128,18 +124,16 @@ if uploaded_file is not None:
                 "적요": str(df_up.iloc[i, 1]) if pd.notna(df_up.iloc[i, 1]) else "식대",
                 "지급처": str(df_up.iloc[i, 3]) if pd.notna(df_up.iloc[i, 3]) else "",
                 "금액": int(df_up.iloc[i, 5]) if pd.notna(df_up.iloc[i, 5]) else 0,
-                "결제구분": "법인카드",
-                "첨부": "매출전표",
+                "결제구분": "법인카드", "첨부": "매출전표",
                 "비고": str(df_up.iloc[i, 7]) if pd.notna(df_up.iloc[i, 7]) else ""
             })
         if ex_list: st.session_state["expense_data"] = pd.DataFrame(ex_list)
-        st.toast("✅ 기존 데이터 불러오기 성공!", icon="✨")
+        st.toast("✅ 과거 데이터 불러오기 성공!", icon="✨")
     except Exception as e:
-        st.error(f"파일 읽기 오류: {e}")
+        pass
 
 thin_divider()
 
-# 첨부 데이터를 기반으로 한 선택지
 PROJECT_LIST = ["선택", "전북 군산산단 AX마스터플랜 수립 연구", "상주시-글로컬", "KEITI-중소환경", "대한의협-정보화", "NIPA-SW인재", "호서대-지역청년", "대구TP-과학치안", "KNU-진단 2024"]
 ACCOUNT_LIST = ["선택", "출장비", "회의비", "복리후생비"]
 SUMMARY_LIST = ["식대", "다과비", "교통비", "교통비(KTX)", "교통비(카셰어링)", "주유비", "숙박비", "간식비"]
@@ -182,80 +176,109 @@ st.markdown(f"**총 지출 금액: <span style='color:#e74c3c;'>{total_amount:,}
 
 thin_divider()
 
-# --- 병합 셀 에러 방지용 커스텀 입력 함수 ---
-def safe_write_to_cell(ws, cell_coord, value):
-    """
-    지정된 좌표(예: 'D9')가 병합된 셀에 속해있을 경우, 
-    자동으로 병합 범위의 대표 셀(Top-Left)을 찾아 값을 입력합니다.
-    """
-    cell = ws[cell_coord]
-    # 'MergedCell' 타입이면 껍데기 셀이라는 뜻입니다.
-    if type(cell).__name__ == 'MergedCell':
-        for merged_range in ws.merged_cells.ranges:
-            if cell_coord in merged_range:
-                # 병합 범위의 진짜 대표 셀(최소 행/열)에 값 입력
-                master_cell = ws.cell(row=merged_range.min_row, column=merged_range.min_col)
-                master_cell.value = value
-                return
-    else:
-        # 일반 셀이면 그냥 입력합니다.
-        cell.value = value
-
-def safe_write_rc(ws, r, c, value):
-    """ 행(row)과 열(col) 숫자로 셀에 안전하게 값을 입력합니다. """
-    coord = ws.cell(row=r, column=c).coordinate
-    safe_write_to_cell(ws, coord, value)
-
-# --- 깃허브 저장소의 엑셀 템플릿 매핑 함수 ---
-def generate_excel():
-    template_path = "지출결의서_양식.xlsx" 
+# --- 💡 파이썬이 직접 엑셀 모양의 PDF를 그리는 로직 ---
+def generate_pdf_report():
+    pdf = FPDF(orientation="P", unit="mm", format="A4")
+    font_path = "NanumGothic.ttf" # 반드시 깃허브에 업로드 되어있어야 합니다.
     
-    if not os.path.exists(template_path):
-        wb = openpyxl.Workbook()
-        ws = wb.active
-        ws['A1'] = "서버(깃허브)에 '지출결의서_양식.xlsx' 파일이 없습니다."
-    else:
-        wb = openpyxl.load_workbook(template_path)
-        ws = wb.active
-        
-        # [수정 완료] 이제 껍데기 셀을 지정하더라도 알아서 진짜 셀을 찾아 입력합니다.
-        # 첨부해주신 데이터를 토대로 대략적인 좌표를 E8, E9 등으로 조정해두었습니다.
-        safe_write_to_cell(ws, 'B6', project)       
-        safe_write_to_cell(ws, 'B7', purpose)       
-        safe_write_to_cell(ws, 'B8', department)    
-        safe_write_to_cell(ws, 'E8', title)         
-        safe_write_to_cell(ws, 'G8', account)       
-        safe_write_to_cell(ws, 'B9', author)        
-        safe_write_to_cell(ws, 'E9', date.strftime('%Y-%m-%d'))
-        
-        # 지출 내역 반복 입력
-        start_row = 13
-        for i, row in edited_df.iterrows():
-            current_row = start_row + i
-            safe_write_rc(ws, current_row, 1, row['지출일'].strftime('%Y-%m-%d')) # A열
-            safe_write_rc(ws, current_row, 2, row['적요'])                        # B열
-            safe_write_rc(ws, current_row, 4, row['지급처'])                      # D열 (C, D 병합일 수 있음)
-            safe_write_rc(ws, current_row, 6, row['금액'])                        # F열
-            safe_write_rc(ws, current_row, 8, row['비고'])                        # H열
+    if not os.path.exists(font_path):
+        st.error("⚠️ 서버에 'NanumGothic.ttf' 폰트가 없습니다. 깃허브에 업로드해주세요!")
+        return None
 
-    output = io.BytesIO()
-    wb.save(output)
-    return output.getvalue()
+    # 폰트 등록 및 페이지 추가
+    pdf.add_font("Nanum", "", font_path, uni=True)
+    pdf.add_page()
+    
+    # 1. 문서 제목
+    pdf.set_font("Nanum", "", 20)
+    pdf.cell(0, 15, "지 출 결 의 서", align="C", ln=True)
+    pdf.ln(5)
 
-st.subheader("📥 문서 출력")
+    # 2. 기본 정보 표 그리기 (엑셀 양식과 동일한 레이아웃)
+    pdf.set_font("Nanum", "", 10)
+    w_th = 30 # 항목 너비
+    w_td = 65 # 내용 너비
+    h = 8     # 높이
 
-if st.button("🔄 최종 지출결의서 엑셀 변환", type="primary", use_container_width=True):
+    # 첫 번째 줄
+    pdf.cell(w_th, h, "프로젝트", border=1, align="C")
+    pdf.cell(w_td, h, str(project), border=1)
+    pdf.cell(w_th, h, "목적", border=1, align="C")
+    pdf.cell(w_td, h, str(purpose), border=1, ln=True)
+
+    # 두 번째 줄
+    pdf.cell(w_th, h, "부서", border=1, align="C")
+    pdf.cell(w_td, h, str(department), border=1)
+    pdf.cell(w_th, h, "직위", border=1, align="C")
+    pdf.cell(w_td, h, str(title), border=1, ln=True)
+
+    # 세 번째 줄
+    pdf.cell(w_th, h, "작성자", border=1, align="C")
+    pdf.cell(w_td, h, str(author), border=1)
+    pdf.cell(w_th, h, "작성일", border=1, align="C")
+    pdf.cell(w_td, h, date.strftime('%Y-%m-%d'), border=1, ln=True)
+
+    # 네 번째 줄
+    pdf.cell(w_th, h, "계정과목", border=1, align="C")
+    pdf.cell(w_td, h, str(account), border=1)
+    pdf.cell(w_th, h, "총 지출액", border=1, align="C")
+    pdf.cell(w_td, h, f"{total_amount:,} 원", border=1, ln=True)
+
+    pdf.ln(10)
+
+    # 3. 지출 내역 상세 표 그리기
+    pdf.set_font("Nanum", "", 12)
+    pdf.cell(0, 10, "■ 지출 내역 상세", ln=True)
+    pdf.set_font("Nanum", "", 9)
+
+    # 테이블 헤더 (총합 너비: 190mm)
+    col_widths = [25, 25, 35, 25, 20, 20, 40]
+    headers = ["지출일", "적요", "지급처", "금액", "결제구분", "첨부", "비고"]
+    for i in range(len(headers)):
+        pdf.cell(col_widths[i], 8, headers[i], border=1, align="C")
+    pdf.ln()
+
+    # 테이블 내용 반복
+    for _, row in edited_df.iterrows():
+        pdf.cell(col_widths[0], 8, row['지출일'].strftime('%Y-%m-%d'), border=1, align="C")
+        pdf.cell(col_widths[1], 8, str(row['적요']), border=1, align="C")
+        pdf.cell(col_widths[2], 8, str(row['지급처']), border=1, align="C")
+        pdf.cell(col_widths[3], 8, f"{row['금액']:,}", border=1, align="R")
+        pdf.cell(col_widths[4], 8, str(row['결제구분']), border=1, align="C")
+        pdf.cell(col_widths[5], 8, str(row['첨부']), border=1, align="C")
+        pdf.cell(col_widths[6], 8, str(row['비고']), border=1, align="L")
+        pdf.ln()
+
+    # 4. 결재 날인 영역 (추후 도장 이미지를 삽입할 수 있는 여백)
+    pdf.ln(20)
+    pdf.set_font("Nanum", "", 11)
+    pdf.cell(0, 10, "위와 같이 지출결의서를 제출합니다.", align="C", ln=True)
+    pdf.ln(10)
+    pdf.cell(0, 10, f"작성자 : {str(author)} (인)", align="R", ln=True)
+    
+    # 💡 도장(서명) 이미지 삽입을 원하시면 추후 여기에 로직을 추가하면 됩니다.
+    # if os.path.exists("seal.png"):
+    #     pdf.image("seal.png", x=160, y=pdf.get_y()-10, w=15)
+
+    # PDF를 파일 대신 메모리 바이트(Bytes)로 반환하여 즉시 다운로드 지원
+    return bytes(pdf.output())
+
+# --- 최종 문서 출력 영역 ---
+st.subheader("📥 최종 보고서 출력")
+
+if st.button("📑 시스템 지출결의서 (PDF) 생성 및 다운로드", type="primary", use_container_width=True):
     if project == "선택" or not author:
-        st.error("프로젝트와 작성자를 입력해주세요.")
+        st.error("프로젝트와 작성자를 올바르게 입력해주세요.")
     else:
-        excel_data = generate_excel()
-        file_name = f"지출결의서_{author if author else '미상'}_{datetime.today().strftime('%Y%m%d')}.xlsx"
-        
-        st.success("문서 변환이 완료되었습니다. 아래 버튼을 눌러 양식이 적용된 엑셀을 다운로드하세요.")
-        st.download_button(
-            label="📊 완성된 지출결의서 다운로드 (Excel)",
-            data=excel_data,
-            file_name=file_name,
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True
-        )
+        pdf_data = generate_pdf_report()
+        if pdf_data:
+            file_name = f"지출결의서_{author if author else '미상'}_{datetime.today().strftime('%Y%m%d')}.pdf"
+            
+            st.success("🎉 PDF 보고서 생성이 완료되었습니다!")
+            st.download_button(
+                label="📥 완료된 PDF 다운로드",
+                data=pdf_data,
+                file_name=file_name,
+                mime="application/pdf",
+                use_container_width=True
+            )
