@@ -171,4 +171,132 @@ edited_df = st.data_editor(
         "지출일": st.column_config.DateColumn("지출일자", required=True),
         "적요": st.column_config.SelectboxColumn("적요", options=SUMMARY_LIST, required=True),
         "지급처": st.column_config.TextColumn("지급처", required=True),
-        "금액": st.column_config.NumberColumn("금액", min_value=0, step=10
+        "금액": st.column_config.NumberColumn("금액", min_value=0, step=10, required=True, format="%d 원"),
+        "결제구분": st.column_config.SelectboxColumn("결제구분", options=PAYMENT_METHODS, required=True),
+        "첨부": st.column_config.SelectboxColumn("첨부", options=ATTACHMENTS, required=True),
+        "비고": st.column_config.TextColumn("비고"),
+    },
+    num_rows="dynamic", use_container_width=True, hide_index=True
+)
+
+total_amount = edited_df["금액"].sum()
+amount_korean = number_to_korean(total_amount)
+st.markdown(f"**총 지출 금액: <span style='color:#e74c3c;'>{total_amount:,} 원</span> ({amount_korean})**", unsafe_allow_html=True)
+
+thin_divider()
+
+# --- 💡 핵심: 글자 넘침 방지 (Auto-fit) 함수 ---
+def draw_text_autofit(can, text, x, y, max_width, default_size=10, align="left"):
+    """
+    글자가 max_width를 넘어가면 칸에 맞게 폰트 크기를 자동으로 줄여서 그리는 함수.
+    """
+    text = str(text)
+    current_size = default_size
+    font_name = "Nanum"
+    
+    can.setFont(font_name, current_size)
+    text_width = pdfmetrics.stringWidth(text, font_name, current_size)
+
+    # 글자가 칸보다 넓으면 폰트 크기를 0.5씩 줄임 (최소 5pt까지만)
+    while text_width > max_width and current_size > 5.0:
+        current_size -= 0.5
+        can.setFont(font_name, current_size)
+        text_width = pdfmetrics.stringWidth(text, font_name, current_size)
+
+    # 정렬 방식에 따라 그리기
+    if align == "center":
+        can.drawCentredString(x + (max_width / 2), y, text)
+    elif align == "right":
+        can.drawRightString(x + max_width, y, text)
+    else: # 기본 왼쪽 정렬
+        can.drawString(x, y, text)
+        
+    # 사용 후 캔버스 폰트 크기 초기화
+    can.setFont(font_name, default_size)
+
+# --- PDF 오버레이 로직 ---
+def generate_overlay_pdf():
+    font_path = "NanumGothic.ttf"
+    if not os.path.exists(font_path):
+        st.error("⚠️ 'NanumGothic.ttf' 파일이 없습니다. 깃허브에 업로드해주세요.")
+        return None
+    pdfmetrics.registerFont(TTFont("Nanum", font_path))
+
+    bg_path = "blank_template.pdf"
+    if not os.path.exists(bg_path):
+        st.error("⚠️ 'blank_template.pdf' (빈 양식 PDF) 파일이 없습니다. 깃허브에 업로드해주세요.")
+        return None
+
+    packet = io.BytesIO()
+    can = canvas.Canvas(packet, pagesize=A4)
+
+    # [나중에 직접 채워 넣어야 하는 부분]
+    # draw_text_autofit(캔버스객체, 텍스트, X좌표, Y좌표, 최대허용너비(max_width), 기본폰트크기, 정렬)
+    # 아래 max_width(예: 150)는 실제 빈칸의 픽셀 너비에 맞게 조절하세요.
+    
+    draw_text_autofit(can, project, 150, 700, max_width=180, default_size=10)
+    draw_text_autofit(can, purpose, 150, 680, max_width=180, default_size=10)
+    draw_text_autofit(can, department, 150, 660, max_width=80, default_size=10)
+    draw_text_autofit(can, title, 350, 660, max_width=80, default_size=10)
+    draw_text_autofit(can, author, 150, 640, max_width=80, default_size=10)
+    draw_text_autofit(can, date.strftime('%Y년 %m월 %d일'), 350, 640, max_width=80, default_size=10)
+    draw_text_autofit(can, f"{amount_korean} (\\{total_amount:,})", 150, 620, max_width=180, default_size=10)
+    draw_text_autofit(can, account, 350, 620, max_width=80, default_size=10)
+
+    # 지출 내역 리스트업
+    start_y = 550
+    line_height = 20
+    for i, row in edited_df.iterrows():
+        current_y = start_y - (i * line_height)
+        # 좁은 칸들(지급처, 비고 등)에 오토핏 적용
+        draw_text_autofit(can, row['지출일'].strftime('%m/%d'), 70, current_y, max_width=40, align="center")
+        draw_text_autofit(can, row['적요'], 130, current_y, max_width=50, align="center")
+        draw_text_autofit(can, row['지급처'], 220, current_y, max_width=80) 
+        draw_text_autofit(can, f"{row['금액']:,}", 300, current_y, max_width=50, align="right") 
+        draw_text_autofit(can, row['비고'], 380, current_y, max_width=100)
+
+    # 합계 및 결제구분
+    draw_text_autofit(can, f"\\{total_amount:,}", 300, start_y - (10 * line_height), max_width=50, align="right")
+    pay_methods = ", ".join(edited_df["결제구분"].unique())
+    attach_methods = ", ".join(edited_df["첨부"].unique())
+    draw_text_autofit(can, f"{pay_methods} / {attach_methods}", 220, start_y - (11 * line_height), max_width=150)
+
+    # 서명란
+    draw_text_autofit(can, date.strftime('%Y년 %m월 %d일'), 240, 200, max_width=100, default_size=12)
+    draw_text_autofit(can, f"{department}      {author}  (인)", 300, 160, max_width=150, default_size=12, align="right")
+
+    can.save()
+    packet.seek(0)
+    new_pdf = PdfReader(packet)
+
+    existing_pdf = PdfReader(open(bg_path, "rb"))
+    output = PdfWriter()
+
+    page = existing_pdf.pages[0]
+    page.merge_page(new_pdf.pages[0])
+    output.add_page(page)
+
+    output_stream = io.BytesIO()
+    output.write(output_stream)
+    return output_stream.getvalue()
+
+st.subheader("📥 최종 보고서 출력")
+
+if st.button("📑 완벽한 지출결의서 (PDF) 생성 및 다운로드", type="primary", use_container_width=True):
+    if project == "선택" or not author:
+        st.error("프로젝트와 출장자(작성자)를 올바르게 입력해주세요.")
+    else:
+        st.toast("원본 양식 위에 데이터를 덧입히는 중입니다...", icon="⚙️")
+        pdf_data = generate_overlay_pdf()
+        
+        if pdf_data:
+            file_name = f"지출결의서_{author if author else '미상'}_{datetime.today().strftime('%Y%m%d')}.pdf"
+            
+            st.success("🎉 원본 양식과 100% 동일한 완벽한 PDF가 생성되었습니다!")
+            st.download_button(
+                label="📥 완료된 최종 PDF 다운로드",
+                data=pdf_data,
+                file_name=file_name,
+                mime="application/pdf",
+                use_container_width=True
+            )
