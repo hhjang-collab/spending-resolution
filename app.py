@@ -2,7 +2,9 @@ import streamlit as st
 import pandas as pd
 import base64
 import os
+import io
 from datetime import datetime
+import openpyxl
 
 # 1. 페이지 기본 설정 (공통 필수 규칙 2)
 st.set_page_config(page_title="지출결의서 작성 앱", layout="centered")
@@ -81,7 +83,6 @@ with st.sidebar:
     st.button("신규 작성", use_container_width=True)
     st.button("작성 내역 조회", use_container_width=True)
     
-    # 관리자용 엑셀 다운로드는 사이드바로 분리하여 일반 사용자의 혼선을 방지합니다.
     st.markdown("<br>", unsafe_allow_html=True)
     st.markdown("### ⚙️ 관리자 메뉴")
     st.button("📊 월별 전체내역 엑셀 다운로드", use_container_width=True)
@@ -90,42 +91,79 @@ with st.sidebar:
 def thin_divider():
     st.markdown('<hr style="margin-top: 15px; margin-bottom: 15px; border: 0; border-top: 1px solid rgba(49, 51, 63, 0.2);">', unsafe_allow_html=True)
 
+# --- 상태 초기화 (Session State) ---
+if "form_data" not in st.session_state:
+    st.session_state["form_data"] = {
+        "project": "선택", "department": "기술사업화팀", "author": "",
+        "account": "선택", "purpose": "", "title": "대리", "date": datetime.today()
+    }
+if "expense_data" not in st.session_state:
+    st.session_state["expense_data"] = pd.DataFrame(
+        [{"지출일": datetime.today().date(), "적요": "식대", "지급처": "", "금액": 0, "결제구분": "법인카드", "첨부": "매출전표", "비고": ""}]
+    )
+
 # --- 메인 화면 로직 ---
 st.title("📄 지출결의서 작성")
-st.caption("내용을 입력하고 하단의 'PDF 다운로드'를 클릭하면 전자날인이 포함된 최종 결의서가 생성됩니다.")
+st.caption("작성된 데이터는 기존 엑셀 양식의 서식을 그대로 유지한 채 출력됩니다.")
+
+# --- 엑셀 업로드 (자동 완성) ---
+uploaded_file = st.file_uploader("📂 기존 작성본 업로드 (내용 자동 완성)", type=['xlsx'])
+
+if uploaded_file is not None:
+    try:
+        df_up = pd.read_excel(uploaded_file, header=None)
+        # [나중에 직접 채워 넣어야 하는 부분] 실제 업로드된 양식의 셀 위치에 맞게 인덱스(행,열) 조정 필요 (0부터 시작)
+        st.session_state["form_data"]["project"] = str(df_up.iloc[5, 1]) if pd.notna(df_up.iloc[5, 1]) else "선택"
+        st.session_state["form_data"]["purpose"] = str(df_up.iloc[6, 1]) if pd.notna(df_up.iloc[6, 1]) else ""
+        st.session_state["form_data"]["department"] = str(df_up.iloc[7, 1]) if pd.notna(df_up.iloc[7, 1]) else ""
+        st.session_state["form_data"]["title"] = str(df_up.iloc[7, 3]) if pd.notna(df_up.iloc[7, 3]) else ""
+        st.session_state["form_data"]["author"] = str(df_up.iloc[8, 1]) if pd.notna(df_up.iloc[8, 1]) else ""
+        st.session_state["form_data"]["account"] = str(df_up.iloc[7, 5]) if pd.notna(df_up.iloc[7, 5]) else "선택"
+        
+        ex_list = []
+        for i in range(11, len(df_up)):
+            val = df_up.iloc[i, 0]
+            if pd.isna(val): continue
+            ex_list.append({
+                "지출일": pd.to_datetime(val).date() if isinstance(val, str) else val,
+                "적요": str(df_up.iloc[i, 1]) if pd.notna(df_up.iloc[i, 1]) else "식대",
+                "지급처": str(df_up.iloc[i, 3]) if pd.notna(df_up.iloc[i, 3]) else "",
+                "금액": int(df_up.iloc[i, 5]) if pd.notna(df_up.iloc[i, 5]) else 0,
+                "결제구분": "법인카드",
+                "첨부": "매출전표",
+                "비고": str(df_up.iloc[i, 7]) if pd.notna(df_up.iloc[i, 7]) else ""
+            })
+        if ex_list: st.session_state["expense_data"] = pd.DataFrame(ex_list)
+        st.toast("✅ 데이터 불러오기 성공!", icon="✨")
+    except Exception as e:
+        st.error(f"파일 읽기 오류: {e}")
+
 thin_divider()
 
-# 첨부 데이터를 기반으로 한 선택지
-PROJECT_LIST = ["선택", "전북 군산산단 AX마스터플랜 수립 연구", "상주시-글로컬", "KEITI-중소환경", "NIPA-SW인재"]
+# 첨부 데이터를 기반으로 한 선택지 (업데이트됨)
+PROJECT_LIST = ["선택", "전북 군산산단 AX마스터플랜 수립 연구", "상주시-글로컬", "KEITI-중소환경", "대한의협-정보화", "NIPA-SW인재", "호서대-지역청년", "대구TP-과학치안", "KNU-진단 2024"]
 ACCOUNT_LIST = ["선택", "출장비", "회의비", "복리후생비"]
-SUMMARY_LIST = ["식대", "다과비", "교통비(KTX)", "교통비(카셰어링)", "주유비", "숙박비"]
-PAYMENT_METHODS = ["법인카드", "개인카드", "현금", "계좌이체", "사업비카드", "복합결제"]
+SUMMARY_LIST = ["식대", "다과비", "교통비", "교통비(KTX)", "교통비(카셰어링)", "주유비", "숙박비", "간식비"]
+PAYMENT_METHODS = ["현금", "계좌이체", "법인카드", "개인카드", "복합결제", "사업비카드"]
 ATTACHMENTS = ["매출전표", "세금계산서", "현금영수증"]
 
-# 기본 정보 입력 영역
+def get_idx(lst, item): return lst.index(item) if item in lst else 0
+
+st.subheader("📝 기본 정보")
 col1, col2 = st.columns(2)
 with col1:
-    project = st.selectbox("프로젝트", PROJECT_LIST)
-    department = st.text_input("부서", value="기술사업화팀")
-    author = st.text_input("작성자")
-    account = st.selectbox("계정과목", ACCOUNT_LIST)
-
+    project = st.selectbox("프로젝트", PROJECT_LIST, index=get_idx(PROJECT_LIST, st.session_state["form_data"]["project"]))
+    department = st.text_input("부서", value=st.session_state["form_data"]["department"])
+    author = st.text_input("작성자", value=st.session_state["form_data"]["author"])
+    account = st.selectbox("계정과목", ACCOUNT_LIST, index=get_idx(ACCOUNT_LIST, st.session_state["form_data"]["account"]))
 with col2:
-    purpose = st.text_input("목적", value="용역착수보고회 참석")
-    title = st.text_input("직위", value="대리")
-    date = st.date_input("작성일", datetime.today())
+    purpose = st.text_input("목적", value=st.session_state["form_data"]["purpose"])
+    title = st.text_input("직위", value=st.session_state["form_data"]["title"])
+    date = st.date_input("작성일", st.session_state["form_data"]["date"])
     
 thin_divider()
 
 st.subheader("💳 지출 내역 상세")
-
-if "expense_data" not in st.session_state:
-    st.session_state["expense_data"] = pd.DataFrame(
-        [
-            {"지출일": datetime.today().date(), "적요": "교통비(KTX)", "지급처": "한국철도공사", "금액": 32000, "결제구분": "법인카드", "첨부": "매출전표", "비고": "용산-익산"},
-        ]
-    )
-
 edited_df = st.data_editor(
     st.session_state["expense_data"],
     column_config={
@@ -137,9 +175,7 @@ edited_df = st.data_editor(
         "첨부": st.column_config.SelectboxColumn("첨부", options=ATTACHMENTS, required=True),
         "비고": st.column_config.TextColumn("비고"),
     },
-    num_rows="dynamic",
-    use_container_width=True,
-    hide_index=True
+    num_rows="dynamic", use_container_width=True, hide_index=True
 )
 
 total_amount = edited_df["금액"].sum()
@@ -147,15 +183,58 @@ st.markdown(f"**총 지출 금액: <span style='color:#e74c3c;'>{total_amount:,}
 
 thin_divider()
 
-# --- 최종 문서 출력 영역 (PDF 단일화) ---
+# --- 엑셀 템플릿 매핑 함수 ---
+def generate_excel():
+    # [나중에 직접 채워 넣어야 하는 부분] 서버에 내용이 비워진 '지출결의서_양식.xlsx'을 업로드해야 합니다.
+    template_path = "지출결의서_양식.xlsx" 
+    
+    if not os.path.exists(template_path):
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws['A1'] = "서버에 '지출결의서_양식.xlsx' 파일이 없습니다. 업로드해주세요."
+    else:
+        wb = openpyxl.load_workbook(template_path)
+        ws = wb.active
+        
+        # [나중에 직접 채워 넣어야 하는 부분] 실제 엑셀 양식의 셀 주소(ex: B6, F8)에 맞게 맵핑을 변경하세요.
+        ws['B6'] = project       
+        ws['B7'] = purpose       
+        ws['B8'] = department    
+        ws['D8'] = title         
+        ws['F8'] = account       
+        ws['B9'] = author        
+        ws['D9'] = date.strftime('%Y-%m-%d')
+        ws['B10'] = total_amount # 총 금액
+        
+        # 지출 내역 반복 입력 (양식의 13행부터 입력된다고 가정한 예시)
+        start_row = 13
+        for i, row in edited_df.iterrows():
+            current_row = start_row + i
+            ws.cell(row=current_row, column=1, value=row['지출일'].strftime('%Y-%m-%d'))
+            ws.cell(row=current_row, column=2, value=row['적요'])
+            ws.cell(row=current_row, column=4, value=row['지급처']) # 병합 고려
+            ws.cell(row=current_row, column=6, value=row['금액'])
+            ws.cell(row=current_row, column=8, value=row['비고'])
+
+    output = io.BytesIO()
+    wb.save(output)
+    return output.getvalue()
+
 st.subheader("📥 문서 출력")
 
-# 사용자는 이 큰 버튼 하나만 누르게 됩니다.
-if st.button("📑 최종 지출결의서 PDF 다운로드 (전자날인 포함)", type="primary", use_container_width=True):
+if st.button("🔄 최종 문서 생성 준비", use_container_width=True):
     if project == "선택" or not author:
         st.error("프로젝트와 작성자를 입력해주세요.")
     else:
-        # [나중에 직접 채워 넣어야 하는 부분] 
-        # 실제로는 이곳에서 1. 빈 엑셀에 데이터 삽입 -> 2. PDF로 변환 -> 3. 도장 이미지 합성 로직이 실행됩니다.
-        st.toast(f"✅ {author}님의 지출결의서를 PDF로 생성 중입니다...", icon="⏳")
-        st.info("💡 향후 이곳에 백그라운드 PDF 생성 로직(HTML to PDF 또는 Excel to PDF)이 연결됩니다.")
+        excel_data = generate_excel()
+        file_name = f"지출결의서_{author if author else '미상'}_{datetime.today().strftime('%Y%m%d')}.xlsx"
+        
+        st.success("문서 생성이 완료되었습니다. 아래 버튼을 눌러 다운로드하세요.")
+        st.download_button(
+            label="📊 완성된 지출결의서 다운로드 (Excel)",
+            data=excel_data,
+            file_name=file_name,
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            type="primary",
+            use_container_width=True
+        )
