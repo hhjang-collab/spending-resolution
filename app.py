@@ -17,7 +17,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # 3. 보안 (비밀번호) 로그인 로직 (공통 필수 규칙 3)
-# [나중에 직접 채워 넣어야 하는 부분] .streamlit/secrets.toml 파일에 APP_PASSWORD = "설정한비밀번호" 를 입력해야 합니다.
+# [나중에 직접 채워 넣어야 하는 부분] Streamlit Cloud 대시보드의 Secrets에 APP_PASSWORD = "비밀번호" 를 입력하세요.
 if "authenticated" not in st.session_state:
     st.session_state["authenticated"] = False
 
@@ -43,7 +43,7 @@ def get_base64_of_bin_file(bin_file):
         return base64.b64encode(data).decode()
     return ""
 
-# [나중에 직접 채워 넣어야 하는 부분] 앱과 같은 경로에 "company_logo.png" 파일을 업로드해 두어야 합니다.
+# [나중에 직접 채워 넣어야 하는 부분] 깃허브 저장소에 "company_logo.png" 파일을 업로드해 두세요.
 logo_base64 = get_base64_of_bin_file("company_logo.png")
 if logo_base64:
     st.markdown(f"""
@@ -104,15 +104,15 @@ if "expense_data" not in st.session_state:
 
 # --- 메인 화면 로직 ---
 st.title("📄 지출결의서 작성")
-st.caption("작성된 데이터는 기존 엑셀 양식의 서식을 그대로 유지한 채 출력됩니다.")
+st.caption("작성된 데이터는 깃허브에 저장된 기존 엑셀 양식 서식을 그대로 유지한 채 출력됩니다.")
 
-# --- 엑셀 업로드 (자동 완성) ---
-uploaded_file = st.file_uploader("📂 기존 작성본 업로드 (내용 자동 완성)", type=['xlsx'])
+# --- 💡 기존 작성본 업로드 (자동 완성 영역) ---
+uploaded_file = st.file_uploader("📂 기존에 작성했던 엑셀 파일이 있다면 업로드하세요. (내용 자동 입력)", type=['xlsx'])
 
 if uploaded_file is not None:
     try:
         df_up = pd.read_excel(uploaded_file, header=None)
-        # [나중에 직접 채워 넣어야 하는 부분] 실제 업로드된 양식의 셀 위치에 맞게 인덱스(행,열) 조정 필요 (0부터 시작)
+        # [나중에 직접 채워 넣어야 하는 부분] 업로드한 파일의 셀 위치(행, 열) 미세 조정 (0부터 시작)
         st.session_state["form_data"]["project"] = str(df_up.iloc[5, 1]) if pd.notna(df_up.iloc[5, 1]) else "선택"
         st.session_state["form_data"]["purpose"] = str(df_up.iloc[6, 1]) if pd.notna(df_up.iloc[6, 1]) else ""
         st.session_state["form_data"]["department"] = str(df_up.iloc[7, 1]) if pd.notna(df_up.iloc[7, 1]) else ""
@@ -134,13 +134,13 @@ if uploaded_file is not None:
                 "비고": str(df_up.iloc[i, 7]) if pd.notna(df_up.iloc[i, 7]) else ""
             })
         if ex_list: st.session_state["expense_data"] = pd.DataFrame(ex_list)
-        st.toast("✅ 데이터 불러오기 성공!", icon="✨")
+        st.toast("✅ 기존 데이터 불러오기 성공!", icon="✨")
     except Exception as e:
         st.error(f"파일 읽기 오류: {e}")
 
 thin_divider()
 
-# 첨부 데이터를 기반으로 한 선택지 (업데이트됨)
+# 첨부 데이터를 기반으로 한 선택지
 PROJECT_LIST = ["선택", "전북 군산산단 AX마스터플랜 수립 연구", "상주시-글로컬", "KEITI-중소환경", "대한의협-정보화", "NIPA-SW인재", "호서대-지역청년", "대구TP-과학치안", "KNU-진단 2024"]
 ACCOUNT_LIST = ["선택", "출장비", "회의비", "복리후생비"]
 SUMMARY_LIST = ["식대", "다과비", "교통비", "교통비(KTX)", "교통비(카셰어링)", "주유비", "숙박비", "간식비"]
@@ -183,20 +183,22 @@ st.markdown(f"**총 지출 금액: <span style='color:#e74c3c;'>{total_amount:,}
 
 thin_divider()
 
-# --- 엑셀 템플릿 매핑 함수 ---
+# --- 💡 깃허브 저장소의 엑셀 템플릿 매핑 함수 ---
 def generate_excel():
-    # [나중에 직접 채워 넣어야 하는 부분] 서버에 내용이 비워진 '지출결의서_양식.xlsx'을 업로드해야 합니다.
+    # [나중에 직접 채워 넣어야 하는 부분] 
+    # 깃허브 저장소(app.py와 같은 위치)에 내용이 비워진 '지출결의서_양식.xlsx'을 업로드해 두세요.
     template_path = "지출결의서_양식.xlsx" 
     
     if not os.path.exists(template_path):
         wb = openpyxl.Workbook()
         ws = wb.active
-        ws['A1'] = "서버에 '지출결의서_양식.xlsx' 파일이 없습니다. 업로드해주세요."
+        ws['A1'] = "서버(깃허브)에 '지출결의서_양식.xlsx' 파일이 없습니다. 깃허브에 업로드해주세요."
     else:
+        # 깃허브에 있는 양식 파일을 그대로 읽어옵니다.
         wb = openpyxl.load_workbook(template_path)
         ws = wb.active
         
-        # [나중에 직접 채워 넣어야 하는 부분] 실제 엑셀 양식의 셀 주소(ex: B6, F8)에 맞게 맵핑을 변경하세요.
+        # [나중에 직접 채워 넣어야 하는 부분] 실제 엑셀 양식의 셀 주소(ex: B6, F8)에 맞게 아래 좌표를 변경하세요.
         ws['B6'] = project       
         ws['B7'] = purpose       
         ws['B8'] = department    
@@ -212,29 +214,29 @@ def generate_excel():
             current_row = start_row + i
             ws.cell(row=current_row, column=1, value=row['지출일'].strftime('%Y-%m-%d'))
             ws.cell(row=current_row, column=2, value=row['적요'])
-            ws.cell(row=current_row, column=4, value=row['지급처']) # 병합 고려
+            ws.cell(row=current_row, column=4, value=row['지급처']) # 병합된 셀을 고려하여 시작 열 지정
             ws.cell(row=current_row, column=6, value=row['금액'])
             ws.cell(row=current_row, column=8, value=row['비고'])
 
+    # 파일로 저장하지 않고 메모리(버퍼)에 올려서 바로 다운로드 시킵니다.
     output = io.BytesIO()
     wb.save(output)
     return output.getvalue()
 
 st.subheader("📥 문서 출력")
 
-if st.button("🔄 최종 문서 생성 준비", use_container_width=True):
+if st.button("🔄 최종 지출결의서 엑셀 변환", type="primary", use_container_width=True):
     if project == "선택" or not author:
         st.error("프로젝트와 작성자를 입력해주세요.")
     else:
         excel_data = generate_excel()
         file_name = f"지출결의서_{author if author else '미상'}_{datetime.today().strftime('%Y%m%d')}.xlsx"
         
-        st.success("문서 생성이 완료되었습니다. 아래 버튼을 눌러 다운로드하세요.")
+        st.success("문서 변환이 완료되었습니다. 아래 버튼을 눌러 양식이 적용된 엑셀을 다운로드하세요.")
         st.download_button(
             label="📊 완성된 지출결의서 다운로드 (Excel)",
             data=excel_data,
             file_name=file_name,
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            type="primary",
             use_container_width=True
         )
