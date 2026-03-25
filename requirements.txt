@@ -1,3 +1,4 @@
-streamlit==1.32.0
-pandas==2.2.1
-xhtml2pdf==0.2.11
+streamlit
+pandas
+xhtml2pdf
+openpyxl
