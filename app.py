@@ -106,13 +106,12 @@ if "expense_data" not in st.session_state:
 st.title("📄 지출결의서 작성")
 st.caption("작성된 데이터는 깃허브에 저장된 기존 엑셀 양식 서식을 그대로 유지한 채 출력됩니다.")
 
-# --- 💡 기존 작성본 업로드 (자동 완성 영역) ---
+# --- 기존 작성본 업로드 (자동 완성 영역) ---
 uploaded_file = st.file_uploader("📂 기존에 작성했던 엑셀 파일이 있다면 업로드하세요. (내용 자동 입력)", type=['xlsx'])
 
 if uploaded_file is not None:
     try:
         df_up = pd.read_excel(uploaded_file, header=None)
-        # [나중에 직접 채워 넣어야 하는 부분] 업로드한 파일의 셀 위치(행, 열) 미세 조정 (0부터 시작)
         st.session_state["form_data"]["project"] = str(df_up.iloc[5, 1]) if pd.notna(df_up.iloc[5, 1]) else "선택"
         st.session_state["form_data"]["purpose"] = str(df_up.iloc[6, 1]) if pd.notna(df_up.iloc[6, 1]) else ""
         st.session_state["form_data"]["department"] = str(df_up.iloc[7, 1]) if pd.notna(df_up.iloc[7, 1]) else ""
@@ -183,42 +182,62 @@ st.markdown(f"**총 지출 금액: <span style='color:#e74c3c;'>{total_amount:,}
 
 thin_divider()
 
-# --- 💡 깃허브 저장소의 엑셀 템플릿 매핑 함수 ---
+# --- 병합 셀 에러 방지용 커스텀 입력 함수 ---
+def safe_write_to_cell(ws, cell_coord, value):
+    """
+    지정된 좌표(예: 'D9')가 병합된 셀에 속해있을 경우, 
+    자동으로 병합 범위의 대표 셀(Top-Left)을 찾아 값을 입력합니다.
+    """
+    cell = ws[cell_coord]
+    # 'MergedCell' 타입이면 껍데기 셀이라는 뜻입니다.
+    if type(cell).__name__ == 'MergedCell':
+        for merged_range in ws.merged_cells.ranges:
+            if cell_coord in merged_range:
+                # 병합 범위의 진짜 대표 셀(최소 행/열)에 값 입력
+                master_cell = ws.cell(row=merged_range.min_row, column=merged_range.min_col)
+                master_cell.value = value
+                return
+    else:
+        # 일반 셀이면 그냥 입력합니다.
+        cell.value = value
+
+def safe_write_rc(ws, r, c, value):
+    """ 행(row)과 열(col) 숫자로 셀에 안전하게 값을 입력합니다. """
+    coord = ws.cell(row=r, column=c).coordinate
+    safe_write_to_cell(ws, coord, value)
+
+# --- 깃허브 저장소의 엑셀 템플릿 매핑 함수 ---
 def generate_excel():
-    # [나중에 직접 채워 넣어야 하는 부분] 
-    # 깃허브 저장소(app.py와 같은 위치)에 내용이 비워진 '지출결의서_양식.xlsx'을 업로드해 두세요.
     template_path = "지출결의서_양식.xlsx" 
     
     if not os.path.exists(template_path):
         wb = openpyxl.Workbook()
         ws = wb.active
-        ws['A1'] = "서버(깃허브)에 '지출결의서_양식.xlsx' 파일이 없습니다. 깃허브에 업로드해주세요."
+        ws['A1'] = "서버(깃허브)에 '지출결의서_양식.xlsx' 파일이 없습니다."
     else:
-        # 깃허브에 있는 양식 파일을 그대로 읽어옵니다.
         wb = openpyxl.load_workbook(template_path)
         ws = wb.active
         
-        # [나중에 직접 채워 넣어야 하는 부분] 실제 엑셀 양식의 셀 주소(ex: B6, F8)에 맞게 아래 좌표를 변경하세요.
-        ws['B6'] = project       
-        ws['B7'] = purpose       
-        ws['B8'] = department    
-        ws['D8'] = title         
-        ws['F8'] = account       
-        ws['B9'] = author        
-        ws['D9'] = date.strftime('%Y-%m-%d')
-        ws['B10'] = total_amount # 총 금액
+        # [수정 완료] 이제 껍데기 셀을 지정하더라도 알아서 진짜 셀을 찾아 입력합니다.
+        # 첨부해주신 데이터를 토대로 대략적인 좌표를 E8, E9 등으로 조정해두었습니다.
+        safe_write_to_cell(ws, 'B6', project)       
+        safe_write_to_cell(ws, 'B7', purpose)       
+        safe_write_to_cell(ws, 'B8', department)    
+        safe_write_to_cell(ws, 'E8', title)         
+        safe_write_to_cell(ws, 'G8', account)       
+        safe_write_to_cell(ws, 'B9', author)        
+        safe_write_to_cell(ws, 'E9', date.strftime('%Y-%m-%d'))
         
-        # 지출 내역 반복 입력 (양식의 13행부터 입력된다고 가정한 예시)
+        # 지출 내역 반복 입력
         start_row = 13
         for i, row in edited_df.iterrows():
             current_row = start_row + i
-            ws.cell(row=current_row, column=1, value=row['지출일'].strftime('%Y-%m-%d'))
-            ws.cell(row=current_row, column=2, value=row['적요'])
-            ws.cell(row=current_row, column=4, value=row['지급처']) # 병합된 셀을 고려하여 시작 열 지정
-            ws.cell(row=current_row, column=6, value=row['금액'])
-            ws.cell(row=current_row, column=8, value=row['비고'])
+            safe_write_rc(ws, current_row, 1, row['지출일'].strftime('%Y-%m-%d')) # A열
+            safe_write_rc(ws, current_row, 2, row['적요'])                        # B열
+            safe_write_rc(ws, current_row, 4, row['지급처'])                      # D열 (C, D 병합일 수 있음)
+            safe_write_rc(ws, current_row, 6, row['금액'])                        # F열
+            safe_write_rc(ws, current_row, 8, row['비고'])                        # H열
 
-    # 파일로 저장하지 않고 메모리(버퍼)에 올려서 바로 다운로드 시킵니다.
     output = io.BytesIO()
     wb.save(output)
     return output.getvalue()
